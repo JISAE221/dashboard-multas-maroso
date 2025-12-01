@@ -12,19 +12,33 @@ st.set_page_config(
 # --- CARREGAMENTO E LIMPEZA DE DADOS (ETL) ---
 @st.cache_data
 def carregar_dados():
-    # Carregando o CSV. O separador parece ser ponto e vírgula
-    df = pd.read_csv("dados.csv", sep=";", encoding="latin1") # Tente 'utf-8' se der erro
+    # Tenta carregar com 'utf-8-sig' que lida melhor com caracteres especiais do Excel
+    try:
+        df = pd.read_csv("dados.csv", sep=";", encoding="utf-8-sig")
+    except:
+        # Se falhar, tenta latin1
+        df = pd.read_csv("dados.csv", sep=";", encoding="latin1")
 
-    # 1. Converter Valor Total para Float (R$ 104,12 -> 104.12)
-    # Removemos pontos de milhar se houver e trocamos virgula por ponto
-    df['Vlr. Total'] = df['Vlr. Total'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-    df['Vlr. Total'] = pd.to_numeric(df['Vlr. Total'], errors='coerce').fillna(0)
+    # --- O PULO DO GATO PARA O ERRO 'ID' ---
+    # Remove espaços em branco antes e depois dos nomes das colunas
+    df.columns = df.columns.str.strip()
+    
+    # Se a primeira coluna não se chamar 'ID' exatamente, forçamos a renomeação
+    # (Isso resolve problemas de caracteres invisíveis no início do arquivo)
+    coluna_id_real = df.columns[0]
+    df.rename(columns={coluna_id_real: 'ID'}, inplace=True)
+    # ---------------------------------------
 
-    # 2. Converter Data
-    df['DATA DEFINITIVA MULTA'] = pd.to_datetime(df['DATA DEFINITIVA MULTA'], format='%d/%m/%Y', errors='coerce')
+    # 1. Tratamento do Valor Total
+    if 'Vlr. Total' in df.columns:
+        df['Vlr. Total'] = df['Vlr. Total'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+        df['Vlr. Total'] = pd.to_numeric(df['Vlr. Total'], errors='coerce').fillna(0)
 
-    # 3. Extrair Estado do Fornecedor para o Mapa
-    # Dicionário simples de coordenadas dos estados (Lat/Lon centrais)
+    # 2. Tratamento da Data
+    if 'DATA DEFINITIVA MULTA' in df.columns:
+        df['DATA DEFINITIVA MULTA'] = pd.to_datetime(df['DATA DEFINITIVA MULTA'], format='%d/%m/%Y', errors='coerce')
+
+    # 3. Extrair Estado
     estados_coords = {
         'PARANA': {'lat': -24.89, 'lon': -51.55, 'uf': 'PR'},
         'PR': {'lat': -24.89, 'lon': -51.55, 'uf': 'PR'},
@@ -34,22 +48,26 @@ def carregar_dados():
         'SP': {'lat': -22.19, 'lon': -48.79, 'uf': 'SP'},
         'SANTA CATARINA': {'lat': -27.45, 'lon': -50.95, 'uf': 'SC'},
         'SC': {'lat': -27.45, 'lon': -50.95, 'uf': 'SC'},
-        # Adicione outros estados conforme necessário
+        'MATO GROSSO DO SUL': {'lat': -20.51, 'lon': -54.54, 'uf': 'MS'},
+        'MS': {'lat': -20.51, 'lon': -54.54, 'uf': 'MS'},
+        'GOIAS': {'lat': -15.98, 'lon': -49.86, 'uf': 'GO'},
+        'GO': {'lat': -15.98, 'lon': -49.86, 'uf': 'GO'},
     }
 
     def identificar_estado(texto):
         texto = str(texto).upper()
+        # Mapeia estados
         for estado, coords in estados_coords.items():
             if estado in texto:
                 return coords['lat'], coords['lon'], coords['uf']
-        return None, None, 'Outros' # Fallback
+        return None, None, 'Outros'
 
-    # Aplica a função para criar colunas de lat/lon
-    coords = df['Fornecedor'].apply(identificar_estado)
-    df['lat'] = [x[0] for x in coords]
-    df['lon'] = [x[1] for x in coords]
-    df['UF'] = [x[2] for x in coords]
-
+    if 'Fornecedor' in df.columns:
+        coords = df['Fornecedor'].apply(identificar_estado)
+        df['lat'] = [x[0] for x in coords]
+        df['lon'] = [x[1] for x in coords]
+        df['UF'] = [x[2] for x in coords]
+    
     return df
 
 try:
