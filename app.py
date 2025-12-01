@@ -1,220 +1,238 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import os
+import re
+import bisect
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(
-    page_title="Dashboard de Multas - Maroso",
-    page_icon="🚗",
-    layout="wide"
-)
+# --- CONFIGURAÇÃO ---
+st.set_page_config(page_title="Dashboard de Multas - Maroso", page_icon="🚗", layout="wide")
 
-# --- 🎨 ANIMAÇÕES CSS (O SEGREDO DO VISUAL) ---
-def injetar_css():
-    st.markdown("""
-        <style>
-        /* Define a animação de aparecer subindo */
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translate3d(0, 20px, 0);
-            }
-            to {
-                opacity: 1;
-                transform: translate3d(0, 0, 0);
-            }
-        }
+# --- ESTILO (Dark/Red Refinado) ---
+st.markdown("""
+    <style>
+    /* Ajuste dos Cards KPI */
+    div[data-testid="stMetric"] {
+        background-color: #1E1E1E; 
+        padding: 15px; 
+        border-radius: 8px; 
+        border-left: 5px solid #D90429; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+    }
+    /* Ajuste do Título */
+    h1 { color: #ffffff; }
+    /* Ajuste de espaçamento global */
+    .block-container { padding-top: 2rem; padding-bottom: 5rem; }
+    </style>
+    """, unsafe_allow_html=True)
 
-        /* Aplica nos Cartões de KPI (Métricas) */
-        div[data-testid="stMetric"], div[data-testid="metric-container"] {
-            animation: fadeInUp 0.5s ease-out forwards;
-            background-color: #262730; /* Fundo cinza suave no cartão */
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3); /* Sombra leve */
-            border: 1px solid #333;
-        }
-
-        /* Aplica nos Gráficos */
-        div[data-testid="stPlotlyChart"] {
-            animation: fadeInUp 0.7s ease-out forwards;
-        }
-
-        /* Aplica na Tabela */
-        div[data-testid="stDataFrame"] {
-            animation: fadeInUp 0.9s ease-out forwards;
-        }
-        
-        /* Ajuste fino para remover espaços brancos extras no topo */
-        .block-container {
-            padding-top: 2rem;
-            padding-bottom: 2rem;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
-# Chama a função para aplicar o estilo
-injetar_css()
-
-# --- CARREGAMENTO E LIMPEZA DE DADOS (ETL) ---
+# --- CARREGAMENTO ---
 @st.cache_data(ttl=0)
 def carregar_dados():
+    # 1. Carrega Mapeamento
+    if not os.path.exists("mapeamento_uf.csv"):
+        st.error("⚠️ Faltando arquivo 'mapeamento_uf.csv'.")
+        return None
+        
     try:
-        df = pd.read_csv("dados.csv", sep=";", encoding="utf-8-sig")
+        df_mapa = pd.read_csv("mapeamento_uf.csv", sep=";")
+        # Normaliza colunas para evitar erro de maiúscula/minúscula
+        df_mapa.columns = [c.lower().strip() for c in df_mapa.columns]
+    except Exception as e:
+        st.error(f"Erro no mapeamento: {e}")
+        return None
+
+    # 2. Carrega Dados
+    arquivos_csv = [f for f in os.listdir('.') if f.lower().endswith('.csv') and "mapeamento" not in f]
+    if not arquivos_csv: return None
+    
+    try:
+        df = pd.read_csv(arquivos_csv[0], sep=";", encoding="utf-8-sig", on_bad_lines='skip')
     except:
-        df = pd.read_csv("dados.csv", sep=";", encoding="latin1")
+        df = pd.read_csv(arquivos_csv[0], sep=";", encoding="latin1", on_bad_lines='skip')
 
     df.columns = df.columns.str.strip()
 
-    # 1. Tratamento do Valor Total
-    col_valor = None
-    for col in df.columns:
-        if "Vlr" in col or "Valor" in col:
-            col_valor = col
-            break
-            
+    # --- LIMPEZA ---
+    
+    # Valor
+    col_valor = next((c for c in df.columns if "Vlr" in c or "Valor" in c), None)
     if col_valor:
-        df['Vlr. Total'] = df[col_valor].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+        df['Vlr. Total'] = df[col_valor].astype(str).apply(lambda x: re.sub(r'[^\d,]', '', x).replace(',', '.'))
         df['Vlr. Total'] = pd.to_numeric(df['Vlr. Total'], errors='coerce').fillna(0)
-    else:
-        df['Vlr. Total'] = 0
 
-    # 2. Tratamento da Data
-    col_data = None
-    for col in df.columns:
-        if "DATA DEFINITIVA" in col:
-            col_data = col
-            break
-            
+    # Data
+    col_data = next((c for c in df.columns if "DATA DEFINITIVA" in c), None)
     if col_data:
-        df['DATA DEFINITIVA MULTA'] = pd.to_datetime(df[col_data], format='%d/%m/%Y', errors='coerce')
+        df['DATA_REF'] = pd.to_datetime(df[col_data], dayfirst=True, errors='coerce')
+        df['DATA_REF'] = df['DATA_REF'].fillna(pd.to_datetime('today'))
     else:
-        df['DATA DEFINITIVA MULTA'] = pd.to_datetime('today')
+        df['DATA_REF'] = pd.to_datetime('today')
 
-    # 3. Extrair Estado
-    estados_coords = {
-        'PARANA': {'lat': -24.89, 'lon': -51.55, 'uf': 'PR'}, 'PR': {'lat': -24.89, 'lon': -51.55, 'uf': 'PR'},
-        'MINAS': {'lat': -18.10, 'lon': -44.38, 'uf': 'MG'}, 'MG': {'lat': -18.10, 'lon': -44.38, 'uf': 'MG'},
-        'PAULO': {'lat': -22.19, 'lon': -48.79, 'uf': 'SP'}, 'SP': {'lat': -22.19, 'lon': -48.79, 'uf': 'SP'},
-        'CATARINA': {'lat': -27.45, 'lon': -50.95, 'uf': 'SC'}, 'SC': {'lat': -27.45, 'lon': -50.95, 'uf': 'SC'},
-        'MATO GROSSO DO SUL': {'lat': -20.51, 'lon': -54.54, 'uf': 'MS'}, 'MS': {'lat': -20.51, 'lon': -54.54, 'uf': 'MS'},
-        'GOIAS': {'lat': -15.98, 'lon': -49.86, 'uf': 'GO'}, 'GO': {'lat': -15.98, 'lon': -49.86, 'uf': 'GO'},
-    }
-
-    def identificar_estado(texto):
-        texto = str(texto).upper()
-        for estado, coords in estados_coords.items():
-            if estado in texto:
-                return coords['lat'], coords['lon'], coords['uf']
-        return None, None, 'Outros'
-
-    col_fornecedor = [c for c in df.columns if "Fornecedor" in c or "Orgao" in c]
+    # --- CRUZAMENTO ---
+    col_fornecedor = next((c for c in df.columns if "Fornecedor" in c or "Orgao" in c), None)
+    
     if col_fornecedor:
-        coords = df[col_fornecedor[0]].apply(identificar_estado)
-        df['lat'] = [x[0] for x in coords]
-        df['lon'] = [x[1] for x in coords]
-        df['UF'] = [x[2] for x in coords]
+        df['chave_join'] = df[col_fornecedor].astype(str).str.strip()
+        # Garante que a coluna de join do mapa também é string
+        if 'fornecedor' in df_mapa.columns:
+            df_mapa['fornecedor'] = df_mapa['fornecedor'].astype(str).str.strip()
+            df = pd.merge(df, df_mapa, left_on='chave_join', right_on='fornecedor', how='left')
+        
+        # Tratamento de Nulos pós-join
+        cols_check = ['uf_correta', 'lat', 'lon']
+        for col in cols_check:
+            if col not in df.columns: df[col] = None # Cria se não existir
+            
+        df['uf_correta'] = df['uf_correta'].fillna('OUTROS')
+        df['lat'] = df['lat'].fillna(-15.78)
+        df['lon'] = df['lon'].fillna(-47.92)
     
     return df
 
-try:
-    df = carregar_dados()
-except Exception as e:
-    st.error(f"Erro ao ler CSV: {e}")
+df = carregar_dados()
+
+if df is None:
+    st.error("⚠️ Adicione os arquivos CSV.")
     st.stop()
 
-# --- SIDEBAR (FILTROS) ---
+# --- BUSCA BINÁRIA ---
+def busca_binaria(lista, termo):
+    idx = bisect.bisect_left(lista, termo.upper())
+    res = []
+    while idx < len(lista) and lista[idx].startswith(termo.upper()):
+        res.append(lista[idx])
+        idx += 1
+    return res
+
+# --- SIDEBAR ---
 with st.sidebar:
-    st.image("logo.png", width=200) 
+    if os.path.exists("logo.png"): st.image("logo.png", width=200)
     st.header("Filtros")
     
-    # Filtros
-    min_date = df['DATA DEFINITIVA MULTA'].min()
-    max_date = df['DATA DEFINITIVA MULTA'].max()
-    data_inicio = st.date_input("Data Início", min_date)
-    data_fim = st.date_input("Data Fim", max_date)
-
-    if 'PLACA TRATATIVA' in df.columns:
-        todas_placas = st.checkbox("Todas as Placas", value=True)
-        if not todas_placas:
-            placas = st.multiselect("Pesquisar Placa:", df['PLACA TRATATIVA'].unique())
-            if placas:
-                df = df[df['PLACA TRATATIVA'].isin(placas)]
+    d_min = df['DATA_REF'].min().date()
+    d_max = df['DATA_REF'].max().date()
+    inicio = st.date_input("Início", d_min)
+    fim = st.date_input("Fim", d_max)
     
-    if 'UF' in df.columns:
-        ufs = st.multiselect("Região (UF)", df['UF'].unique(), default=df['UF'].unique())
-        if ufs:
-            df = df[df['UF'].isin(ufs)]
+    col_placa = next((c for c in df.columns if "PLACA" in c.upper()), None)
+    if col_placa:
+        st.markdown("---")
+        metodo = st.radio("Busca Placa:", ["Lista", "Digitar"])
+        if metodo == "Lista":
+            sel = st.checkbox("Todas", True)
+            if not sel:
+                placas = st.multiselect("Placa:", df[col_placa].unique())
+                if placas: df = df[df[col_placa].isin(placas)]
+        else:
+            placas_ord = sorted(df[col_placa].dropna().astype(str).unique())
+            termo = st.text_input("Digite a placa:")
+            if termo:
+                achou = busca_binaria(placas_ord, termo)
+                if achou: 
+                    df = df[df[col_placa].isin(achou)]
+                    st.success(f"{len(achou)} encontradas.")
+                else: 
+                    st.warning("Nada encontrado.")
+                    df = df[df[col_placa] == 'X']
 
-    df = df[(df['DATA DEFINITIVA MULTA'] >= pd.to_datetime(data_inicio)) & 
-            (df['DATA DEFINITIVA MULTA'] <= pd.to_datetime(data_fim))]
+    if 'uf_correta' in df.columns:
+        lst_uf = sorted([x for x in df['uf_correta'].unique() if isinstance(x, str)])
+        ufs = st.multiselect("Estado:", lst_uf)
+        if ufs: df = df[df['uf_correta'].isin(ufs)]
 
-# --- ÁREA PRINCIPAL ---
+    df = df[(df['DATA_REF'].dt.date >= inicio) & (df['DATA_REF'].dt.date <= fim)]
 
+# --- KPI ---
+total = df['Vlr. Total'].sum()
+qtd = df.shape[0]
+
+top_ofensor = "N/A"
+if 'OPERAÇÃO' in df.columns:
+    df_val = df[df['OPERAÇÃO'].astype(str).str.contains("NÃO LOCALIZADA", case=False) == False]
+    if not df_val.empty:
+        top_ofensor = df_val['OPERAÇÃO'].value_counts().idxmax()
+
+# --- VISUALIZAÇÃO ---
 st.title("📊 Gestão de Multas - Maroso")
 
-total_multas = df['Vlr. Total'].sum()
-qtd_multas = df.shape[0]
-
-top_infrator = "N/A"
-if 'OPERAÇÃO' in df.columns:
-    top_infrator = df['OPERAÇÃO'].value_counts().idxmax() if not df.empty else "N/A"
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Custo Total", f"R$ {total_multas:,.2f}")
-col2.metric("Qtd. Infrações", qtd_multas)
-col3.metric("Maior Ofensor", top_infrator)
+c1, c2, c3 = st.columns(3)
+c1.metric("Custo Total", f"R$ {total:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
+c2.metric("Qtd. Infrações", qtd)
+c3.metric("Maior Ofensor", top_ofensor)
 
 st.divider()
 
-# --- GRÁFICOS ---
-row1_col1, row1_col2 = st.columns([2, 1])
+col1, col2 = st.columns([2, 1])
 
-with row1_col1:
+with col1:
     st.subheader("📍 Mapa de Calor")
-    if 'lat' in df.columns and not df['lat'].isnull().all():
-        df_map = df.dropna(subset=['lat', 'lon'])
-        fig_map = px.scatter_mapbox(
-            df_map, 
-            lat="lat", lon="lon", 
-            color="UF",
-            size="Vlr. Total",
-            zoom=3, height=400,
-            mapbox_style="carto-darkmatter",
-            color_discrete_sequence=["#D90429", "#EF233C", "#FF5400", "#FF6D00", "#FF9E00"]
-        )
-        fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, paper_bgcolor="#0E1117")
-        st.plotly_chart(fig_map, use_container_width=True)
-    else:
-        st.info("Mapa indisponível.")
+    if 'lat' in df.columns and not df.empty:
+        df_map = df[df['uf_correta'] != 'OUTROS']
+        if not df_map.empty:
+            fig = px.scatter_mapbox(
+                df_map, lat="lat", lon="lon", color="uf_correta", size="Vlr. Total",
+                zoom=3, mapbox_style="carto-darkmatter",
+                color_discrete_sequence=px.colors.qualitative.Bold,
+                hover_name="Fornecedor", hover_data=["Vlr. Total"]
+            )
+            # Remove margens para o mapa ocupar tudo
+            fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, paper_bgcolor="#0E1117", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.info("Sem dados geográficos.")
+    else: st.info("Dados insuficientes.")
 
-with row1_col2:
+with col2:
     st.subheader("🚫 Motivos")
-    if 'OBSERVAÇÃO DEFINITIVA' in df.columns:
-        fig_motivos = px.bar(
-            df['OBSERVAÇÃO DEFINITIVA'].value_counts().head(10).sort_values(),
-            orientation='h',
-            color_discrete_sequence=["#D90429"]
+    col_obs = next((c for c in df.columns if "OBSERVAÇÃO" in c or "MOTIVO" in c), None)
+    if col_obs:
+        df_m = df[col_obs].value_counts().head(10).sort_values(ascending=True)
+        # text_auto='.2s' formata para 10k, 1M, etc.
+        fig = px.bar(df_m, orientation='h', text_auto='.2s', color_discrete_sequence=["#D90429"])
+        
+        fig.update_traces(
+            textfont_size=14, 
+            textangle=0, 
+            textposition="outside", # Texto fora da barra
+            cliponaxis=False # Permite que o texto saia da área do gráfico sem cortar
         )
-        fig_motivos.update_layout(showlegend=False, xaxis_title="", yaxis_title="", plot_bgcolor="#0E1117", paper_bgcolor="#0E1117", font_color="white")
-        st.plotly_chart(fig_motivos, use_container_width=True)
+        
+        fig.update_layout(
+            showlegend=False, 
+            plot_bgcolor="#0E1117", 
+            paper_bgcolor="#0E1117", 
+            font_color="white",
+            margin=dict(l=0, r=50, t=0, b=0), # Margem direita extra para o texto caber
+            xaxis=dict(showgrid=True, gridcolor='#333333'), # Grid suave
+            yaxis=dict(showgrid=False)
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-st.subheader("📅 Evolução")
-df['Mes'] = df['DATA DEFINITIVA MULTA'].dt.to_period('M').astype(str)
-df_temporal = df.groupby('Mes')['Vlr. Total'].sum().reset_index()
-fig_line = px.line(df_temporal, x='Mes', y='Vlr. Total', markers=True)
-fig_line.update_traces(line_color="#D90429")
-fig_line.update_layout(plot_bgcolor="#0E1117", paper_bgcolor="#0E1117", font_color="white")
+st.subheader("📅 Evolução Financeira")
+df['Mes'] = df['DATA_REF'].dt.to_period('M').astype(str)
+df_t = df.groupby('Mes')['Vlr. Total'].sum().reset_index()
+
+fig_line = px.area(df_t, x='Mes', y='Vlr. Total', markers=True, text='Vlr. Total')
+
+# Formatação R$ compacta no gráfico de linha
+fig_line.update_traces(
+    line_color="#D90429", 
+    fillcolor="rgba(217, 4, 41, 0.2)", 
+    texttemplate='R$ %{y:.2s}', # Formata o label do ponto (Ex: R$ 10k)
+    textposition='top center',
+    textfont_size=12
+)
+
+fig_line.update_layout(
+    plot_bgcolor="#0E1117", 
+    paper_bgcolor="#0E1117", 
+    font_color="white",
+    yaxis=dict(showgrid=True, gridcolor='#333333', title=""), # Tira titulo do eixo Y para limpar
+    xaxis=dict(showgrid=False, title=""),
+    margin=dict(t=20, l=10, r=10, b=10)
+)
 st.plotly_chart(fig_line, use_container_width=True)
 
-# --- TABELA ---
 st.divider()
-st.subheader("📋 Detalhamento das Multas")
-colunas_para_tabela = ['DATA DEFINITIVA MULTA', 'PLACA TRATATIVA', 'OBSERVAÇÃO DEFINITIVA', 'Vlr. Total', 'OPERAÇÃO', 'Fornecedor']
-cols_existentes = [c for c in colunas_para_tabela if c in df.columns]
-
-st.dataframe(
-    df[cols_existentes].sort_values('DATA DEFINITIVA MULTA', ascending=False),
-    use_container_width=True,
-    hide_index=True
-)
+st.subheader("📋 Dados Brutos")
+st.dataframe(df.sort_values('DATA_REF', ascending=False), use_container_width=True, hide_index=True)
