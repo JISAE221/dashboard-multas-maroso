@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 # --- CARREGAMENTO E LIMPEZA DE DADOS (ETL) ---
-@st.cache_data
+@st.cache_data(ttl=0) # ttl=0 força recarregar sempre, ótimo para testes
 def carregar_dados():
     # Tenta carregar com 'utf-8-sig' que lida melhor com caracteres especiais do Excel
     try:
@@ -109,9 +109,13 @@ st.title("📊 Gestão de Multas - Maroso")
 st.markdown(f"**Análise Financeira e Operacional de Infrações**")
 
 # 1. KPIs (Indicadores Principais)
-total_multas = df['Vlr. Total'].sum()
-qtd_multas = df['ID'].count()
-# Assumindo que 'OPERAÇÃO' ou outra coluna contenha o motorista/empresa responsável
+if 'Vlr. Total' in df.columns:
+    total_multas = df['Vlr. Total'].sum()
+else:
+    total_multas = 0
+
+# Conta as linhas da tabela (funciona mesmo sem a coluna ID)
+qtd_multas = df.shape[0]
 top_infrator = df['OPERAÇÃO'].value_counts().idxmax() if not df.empty else "N/A"
 
 col1, col2, col3 = st.columns(3)
@@ -130,18 +134,37 @@ with row1_col1:
     # Agrupando por UF para o mapa
     if not df['lat'].isnull().all():
         df_map = df.dropna(subset=['lat', 'lon'])
+        with row1_col1:
+    st.subheader("📍 Mapa de Calor (Volume por Região)")
+    # Agrupando por UF para o mapa
+    if 'lat' in df.columns and not df['lat'].isnull().all():
+        df_map = df.dropna(subset=['lat', 'lon'])
+        
         fig_map = px.scatter_mapbox(
             df_map, 
             lat="lat", 
             lon="lon", 
             hover_name="Fornecedor",
             hover_data=["Vlr. Total", "PLACA TRATATIVA"],
-            color="UF",
+            color="UF",   # As cores mudam conforme o Estado
             size="Vlr. Total",
             zoom=3, 
             height=400,
-            mapbox_style="open-street-map" # Estilo gratuito, não precisa de API Key
+            # 1. AQUI VIRA DARK (Sem precisar de API Key)
+            mapbox_style="carto-darkmatter",
+            # 2. AQUI DEFINIMOS AS CORES (Vermelho Sangue -> Laranja)
+            color_discrete_sequence=["#D90429", "#EF233C", "#FF5400", "#FF6D00", "#FF9E00"]
         )
+        
+        # Ajustes finos para remover margens brancas
+        fig_map.update_layout(
+            margin={"r":0,"t":0,"l":0,"b":0},
+            paper_bgcolor="#0E1117", # Fundo preto igual ao do site
+        )
+        
+        st.plotly_chart(fig_map, use_container_width=True)
+    else:
+        st.warning("Não foi possível extrair localização dos fornecedores para gerar o mapa.")
         fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
         st.plotly_chart(fig_map, use_container_width=True)
     else:

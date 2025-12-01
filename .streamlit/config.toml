@@ -1,0 +1,18 @@
+[theme]
+# O tema base é escuro
+base = "dark"
+
+# Cor primária (para botões, sliders e destaques) - O Vermelho vibrante do carro
+primaryColor = "#ff8800ff"
+
+# Cor de fundo principal (o "chão" do site) - Preto quase total
+backgroundColor = "#0E1117"
+
+# Cor de fundo da barra lateral e cartões - Um cinza chumbo para dar contraste
+secondaryBackgroundColor = "#262730"
+
+# Cor do texto principal - Branco para leitura fácil no fundo preto
+textColor = "#FAFAFA"
+
+# Fonte (opcional, mas a sans serif combina com o estilo moderno)
+font = "sans serif"
