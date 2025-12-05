@@ -36,7 +36,6 @@ def carregar_dados():
         
     try:
         df_mapa = pd.read_csv("mapeamento_uf.csv", sep=";")
-        # Normaliza colunas para evitar erro de maiúscula/minúscula
         df_mapa.columns = [c.lower().strip() for c in df_mapa.columns]
     except Exception as e:
         st.error(f"Erro no mapeamento: {e}")
@@ -61,28 +60,33 @@ def carregar_dados():
         df['Vlr. Total'] = df[col_valor].astype(str).apply(lambda x: re.sub(r'[^\d,]', '', x).replace(',', '.'))
         df['Vlr. Total'] = pd.to_numeric(df['Vlr. Total'], errors='coerce').fillna(0)
 
-    # Data
-    col_data = next((c for c in df.columns if "DATA DEFINITIVA" in c), None)
+    # --- CORREÇÃO DA DATA ---
+    col_data = next((c for c in df.columns if "DATA DEFINITIVA" in c.upper()), None)
+    
+    if not col_data:
+        col_data = next((c for c in df.columns if "VENCIMENTO" in c.upper()), None)
+
     if col_data:
         df['DATA_REF'] = pd.to_datetime(df[col_data], dayfirst=True, errors='coerce')
-        df['DATA_REF'] = df['DATA_REF'].fillna(pd.to_datetime('today'))
+        if df['DATA_REF'].isna().mean() > 0.9:
+             col_venc = next((c for c in df.columns if "VENCIMENTO" in c.upper()), None)
+             if col_venc:
+                 df['DATA_REF'] = pd.to_datetime(df[col_venc], dayfirst=True, errors='coerce')
     else:
-        df['DATA_REF'] = pd.to_datetime('today')
+        df['DATA_REF'] = pd.NaT
 
     # --- CRUZAMENTO ---
     col_fornecedor = next((c for c in df.columns if "Fornecedor" in c or "Orgao" in c), None)
     
     if col_fornecedor:
         df['chave_join'] = df[col_fornecedor].astype(str).str.strip()
-        # Garante que a coluna de join do mapa também é string
         if 'fornecedor' in df_mapa.columns:
             df_mapa['fornecedor'] = df_mapa['fornecedor'].astype(str).str.strip()
             df = pd.merge(df, df_mapa, left_on='chave_join', right_on='fornecedor', how='left')
         
-        # Tratamento de Nulos pós-join
         cols_check = ['uf_correta', 'lat', 'lon']
         for col in cols_check:
-            if col not in df.columns: df[col] = None # Cria se não existir
+            if col not in df.columns: df[col] = None 
             
         df['uf_correta'] = df['uf_correta'].fillna('OUTROS')
         df['lat'] = df['lat'].fillna(-15.78)
@@ -110,11 +114,15 @@ with st.sidebar:
     if os.path.exists("logo.png"): st.image("logo.png", width=200)
     st.header("Filtros")
     
-    d_min = df['DATA_REF'].min().date()
-    d_max = df['DATA_REF'].max().date()
-    inicio = st.date_input("Início", d_min)
-    fim = st.date_input("Fim", d_max)
-    
+    if not df.empty and 'DATA_REF' in df.columns and df['DATA_REF'].notna().any():
+        d_min = df['DATA_REF'].min().date()
+        d_max = df['DATA_REF'].max().date()
+        inicio = st.date_input("Início", d_min)
+        fim = st.date_input("Fim", d_max)
+        df = df[(df['DATA_REF'].dt.date >= inicio) & (df['DATA_REF'].dt.date <= fim)]
+    else:
+        st.warning("⚠️ Nenhuma data válida encontrada nos dados.")
+
     col_placa = next((c for c in df.columns if "PLACA" in c.upper()), None)
     if col_placa:
         st.markdown("---")
@@ -141,8 +149,6 @@ with st.sidebar:
         ufs = st.multiselect("Estado:", lst_uf)
         if ufs: df = df[df['uf_correta'].isin(ufs)]
 
-    df = df[(df['DATA_REF'].dt.date >= inicio) & (df['DATA_REF'].dt.date <= fim)]
-
 # --- KPI ---
 total = df['Vlr. Total'].sum()
 qtd = df.shape[0]
@@ -153,13 +159,19 @@ if 'OPERAÇÃO' in df.columns:
     if not df_val.empty:
         top_ofensor = df_val['OPERAÇÃO'].value_counts().idxmax()
 
+total_motivos = 0
+col_obs_kpi = next((c for c in df.columns if "OBSERVAÇÃO" in c.upper() or "MOTIVO" in c.upper()), None)
+if col_obs_kpi:
+    total_motivos = df[col_obs_kpi].count()
+
 # --- VISUALIZAÇÃO ---
 st.title("📊 Gestão de Multas - Maroso")
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Custo Total", f"R$ {total:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
 c2.metric("Qtd. Infrações", qtd)
 c3.metric("Maior Ofensor", top_ofensor)
+c4.metric("Total Motivos", total_motivos)
 
 st.divider()
 
@@ -176,7 +188,6 @@ with col1:
                 color_discrete_sequence=px.colors.qualitative.Bold,
                 hover_name="Fornecedor", hover_data=["Vlr. Total"]
             )
-            # Remove margens para o mapa ocupar tudo
             fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, paper_bgcolor="#0E1117", height=400)
             st.plotly_chart(fig, use_container_width=True)
         else: st.info("Sem dados geográficos.")
@@ -184,7 +195,8 @@ with col1:
 
 with col2:
     st.subheader("🚫 Motivos")
-    col_obs = next((c for c in df.columns if "OBSERVAÇÃO" in c or "MOTIVO" in c), None)
+    col_obs = next((c for c in df.columns if "OBSERVAÇÃO" in c.upper() or "MOTIVO" in c.upper()), None)
+    
     if col_obs:
         df_m = df[col_obs].value_counts().head(10).sort_values(ascending=True)
         # text_auto='.2s' formata para 10k, 1M, etc.
@@ -207,31 +219,38 @@ with col2:
             yaxis=dict(showgrid=False)
         )
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Coluna de Motivos não encontrada.")
 
 st.subheader("📅 Evolução Financeira")
-df['Mes'] = df['DATA_REF'].dt.to_period('M').astype(str)
-df_t = df.groupby('Mes')['Vlr. Total'].sum().reset_index()
 
-fig_line = px.area(df_t, x='Mes', y='Vlr. Total', markers=True, text='Vlr. Total')
+df_evo = df.dropna(subset=['DATA_REF']).copy()
 
-# Formatação R$ compacta no gráfico de linha
-fig_line.update_traces(
-    line_color="#D90429", 
-    fillcolor="rgba(217, 4, 41, 0.2)", 
-    texttemplate='R$ %{y:.2s}', # Formata o label do ponto (Ex: R$ 10k)
-    textposition='top center',
-    textfont_size=12
-)
+if not df_evo.empty:
+    df_evo['Mes_Ref'] = df_evo['DATA_REF'].dt.to_period('M').dt.to_timestamp()
+    df_t = df_evo.groupby('Mes_Ref')['Vlr. Total'].sum().reset_index().sort_values('Mes_Ref')
 
-fig_line.update_layout(
-    plot_bgcolor="#0E1117", 
-    paper_bgcolor="#0E1117", 
-    font_color="white",
-    yaxis=dict(showgrid=True, gridcolor='#333333', title=""), # Tira titulo do eixo Y para limpar
-    xaxis=dict(showgrid=False, title=""),
-    margin=dict(t=20, l=10, r=10, b=10)
-)
-st.plotly_chart(fig_line, use_container_width=True)
+    fig_line = px.area(df_t, x='Mes_Ref', y='Vlr. Total', markers=True, text='Vlr. Total')
+
+    fig_line.update_traces(
+        line_color="#D90429", 
+        fillcolor="rgba(217, 4, 41, 0.2)", 
+        texttemplate='R$ %{y:.2s}', # Manteve a formatação abreviada (10k)
+        textposition='top center',
+        textfont_size=12
+    )
+
+    fig_line.update_layout(
+        plot_bgcolor="#0E1117", 
+        paper_bgcolor="#0E1117", 
+        font_color="white",
+        yaxis=dict(showgrid=True, gridcolor='#333333', title=""),
+        xaxis=dict(showgrid=False, title="", tickformat="%b/%Y", dtick="M1"), 
+        margin=dict(t=30, l=10, r=10, b=10)
+    )
+    st.plotly_chart(fig_line, use_container_width=True)
+else:
+    st.info("⚠️ Não há dados com datas válidas para gerar o gráfico de evolução.")
 
 st.divider()
 st.subheader("📋 Dados Brutos")
