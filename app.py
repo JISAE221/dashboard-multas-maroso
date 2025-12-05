@@ -100,6 +100,27 @@ if df is None:
     st.error("⚠️ Adicione os arquivos CSV.")
     st.stop()
 
+# --- FUNÇÃO AUXILIAR: Encontrar Coluna de Motivo (Evitando 'Brutos') ---
+def get_coluna_motivo(df):
+    # 1. Prioridade absoluta: Nome exato "OBSERVAÇÃO"
+    for c in df.columns:
+        if c.upper().strip() == "OBSERVAÇÃO":
+            return c
+            
+    # 2. Prioridade secundária: "OBSERVAÇÃO DEFINITIVA"
+    for c in df.columns:
+        if "OBSERVAÇÃO DEFINITIVA" in c.upper():
+            return c
+            
+    # 3. Fallback: Procura "MOTIVO" ou "OBSERVAÇÃO", mas EXCLUI "BRUTO" e "ORIGINAL"
+    for c in df.columns:
+        upper_c = c.upper()
+        if ("OBSERVAÇÃO" in upper_c or "MOTIVO" in upper_c):
+            if "BRUTO" not in upper_c and "ORIGINAL" not in upper_c:
+                return c
+                
+    return None
+
 # --- BUSCA BINÁRIA ---
 def busca_binaria(lista, termo):
     idx = bisect.bisect_left(lista, termo.upper())
@@ -123,12 +144,13 @@ with st.sidebar:
     else:
         st.warning("⚠️ Nenhuma data válida encontrada nos dados.")
 
+    # Filtro: Placa
     col_placa = next((c for c in df.columns if "PLACA" in c.upper()), None)
     if col_placa:
         st.markdown("---")
-        metodo = st.radio("Busca Placa:", ["Lista", "Digitar"])
+        metodo = st.radio("Busca Placa:", ["Lista", "Digitar"], key="radio_placa")
         if metodo == "Lista":
-            sel = st.checkbox("Todas", True)
+            sel = st.checkbox("Todas", True, key="check_placa_todas")
             if not sel:
                 placas = st.multiselect("Placa:", df[col_placa].unique())
                 if placas: df = df[df[col_placa].isin(placas)]
@@ -144,11 +166,58 @@ with st.sidebar:
                     st.warning("Nada encontrado.")
                     df = df[df[col_placa] == 'X']
 
+    # Filtro: Estado
     if 'uf_correta' in df.columns:
         lst_uf = sorted([x for x in df['uf_correta'].unique() if isinstance(x, str)])
         ufs = st.multiselect("Estado:", lst_uf)
         if ufs: df = df[df['uf_correta'].isin(ufs)]
 
+    # --- FILTRO: OPERAÇÃO ---
+    col_operacao = next((c for c in df.columns if "OPERAÇÃO" in c.upper() or "OPERACAO" in c.upper()), None)
+    if col_operacao:
+        st.markdown("---")
+        lst_operacao = sorted([str(x) for x in df[col_operacao].unique() if pd.notna(x)])
+        
+        metodo_op = st.radio("Busca Operação:", ["Lista", "Digitar"], key="radio_op")
+        
+        if metodo_op == "Lista":
+            operacoes = st.multiselect("Selecione a Operação:", lst_operacao)
+            if operacoes:
+                df = df[df[col_operacao].isin(operacoes)]
+        else:
+            termo_op = st.text_input("Digite a Operação:", key="txt_op")
+            if termo_op:
+                achou_op = busca_binaria(lst_operacao, termo_op)
+                if achou_op:
+                    st.success(f"{len(achou_op)} encontradas.")
+                    df = df[df[col_operacao].isin(achou_op)]
+                else:
+                    st.warning("Nenhuma operação encontrada.")
+                    df = df[df[col_operacao] == 'X_NADA']
+
+    # --- FILTRO: MOTIVOS (USANDO A LÓGICA CORRIGIDA) ---
+    col_motivo_sidebar = get_coluna_motivo(df)
+    
+    if col_motivo_sidebar:
+        st.markdown("---")
+        lst_motivos = sorted([str(x) for x in df[col_motivo_sidebar].unique() if pd.notna(x)])
+        
+        metodo_mot = st.radio("Busca Motivo:", ["Lista", "Digitar"], key="radio_mot")
+        
+        if metodo_mot == "Lista":
+            motivos_sel = st.multiselect("Selecione o Motivo:", lst_motivos)
+            if motivos_sel:
+                df = df[df[col_motivo_sidebar].isin(motivos_sel)]
+        else:
+            termo_mot = st.text_input("Digite o Motivo:", key="txt_mot")
+            if termo_mot:
+                achou_mot = busca_binaria(lst_motivos, termo_mot)
+                if achou_mot:
+                    st.success(f"{len(achou_mot)} encontrados.")
+                    df = df[df[col_motivo_sidebar].isin(achou_mot)]
+                else:
+                    st.warning("Nenhum motivo encontrado.")
+                    df = df[df[col_motivo_sidebar] == 'X_NADA']
 # --- KPI ---
 total = df['Vlr. Total'].sum()
 qtd = df.shape[0]
@@ -195,8 +264,7 @@ with col1:
 
 with col2:
     st.subheader("🚫 Motivos")
-    col_obs = next((c for c in df.columns if "OBSERVAÇÃO" in c.upper() or "MOTIVO" in c.upper()), None)
-    
+    col_obs = next((c for c in df.columns if "OBSERVAÇÃO" in c or "MOTIVO" in c), None)
     if col_obs:
         df_m = df[col_obs].value_counts().head(10).sort_values(ascending=True)
         # text_auto='.2s' formata para 10k, 1M, etc.
@@ -219,6 +287,7 @@ with col2:
             yaxis=dict(showgrid=False)
         )
         st.plotly_chart(fig, use_container_width=True)
+
     else:
         st.warning("Coluna de Motivos não encontrada.")
 
