@@ -265,8 +265,7 @@ with col2:
     col_obs = next((c for c in df.columns if "OBSERVAÇÃO" in c or "MOTIVO" in c), None)
     if col_obs:
         df_m = df[col_obs].value_counts().head(10).sort_values(ascending=True)
-        # text_auto='.2s' formata para 10k, 1M, etc.
-        fig = px.bar(df_m, orientation='h', text_auto='.2s', color_discrete_sequence=["#D90429"])
+        fig = px.bar(df_m, orientation='h', text_auto='true', color_discrete_sequence=["#D90429"])
         
         fig.update_traces(
             textfont_size=14, 
