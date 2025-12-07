@@ -100,7 +100,6 @@ if df is None:
     st.error("⚠️ Adicione os arquivos CSV.")
     st.stop()
 
-# --- FUNÇÃO AUXILIAR: Encontrar Coluna de Motivo (Evitando 'Brutos') ---
 def get_coluna_motivo(df):
     # 1. Prioridade absoluta: Nome exato "OBSERVAÇÃO"
     for c in df.columns:
@@ -195,7 +194,6 @@ with st.sidebar:
                     st.warning("Nenhuma operação encontrada.")
                     df = df[df[col_operacao] == 'X_NADA']
 
-    # --- FILTRO: MOTIVOS (USANDO A LÓGICA CORRIGIDA) ---
     col_motivo_sidebar = get_coluna_motivo(df)
     
     if col_motivo_sidebar:
@@ -273,8 +271,8 @@ with col2:
         fig.update_traces(
             textfont_size=14, 
             textangle=0, 
-            textposition="outside", # Texto fora da barra
-            cliponaxis=False # Permite que o texto saia da área do gráfico sem cortar
+            textposition="outside",
+            cliponaxis=False
         )
         
         fig.update_layout(
@@ -282,8 +280,8 @@ with col2:
             plot_bgcolor="#0E1117", 
             paper_bgcolor="#0E1117", 
             font_color="white",
-            margin=dict(l=0, r=50, t=0, b=0), # Margem direita extra para o texto caber
-            xaxis=dict(showgrid=True, gridcolor='#333333'), # Grid suave
+            margin=dict(l=0, r=50, t=0, b=0),
+            xaxis=dict(showgrid=True, gridcolor='#333333'),
             yaxis=dict(showgrid=False)
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -304,7 +302,7 @@ if not df_evo.empty:
     fig_line.update_traces(
         line_color="#D90429", 
         fillcolor="rgba(217, 4, 41, 0.2)", 
-        texttemplate='R$ %{y:.2s}', # Manteve a formatação abreviada (10k)
+        texttemplate='R$ %{y:.2s}',
         textposition='top center',
         textfont_size=12
     )
