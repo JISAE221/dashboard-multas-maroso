@@ -11,6 +11,6 @@ faltantes = fornecedores_nos_dados - fornecedores_no_mapa
 
 print(f"Total de Fornecedores nos Dados: {len(fornecedores_nos_dados)}")
 print(f"Total Mapeados: {len(fornecedores_no_mapa)}")
-print(f"--- FALTAM MAPEADAR ({len(faltantes)}) ---")
+print(f"--- FALTAM MAPEAR ({len(faltantes)}) ---")
 for f in faltantes:
     print(f)
