@@ -135,7 +135,7 @@ def limpar_observacao(texto):
     texto = re.sub(r'\s+', ' ', texto).strip()
     
     # --- CATEGORIZAÇÃO INTELIGENTE ---
-    if "VELOCIDADE" in texto or "RADAR" in texto:
+    if "VELOCIDADE" in texto or "RADAR" in texto or "VEL" in texto or "VELOC" in texto or "VELOCID" in texto or "VELOCIDAD" in texto:
         return "EXCESSO DE VELOCIDADE"
     elif "FAROL" in texto:
         return "FAROL DESLIGADO"
@@ -147,6 +147,8 @@ def limpar_observacao(texto):
         return "ESTACIONAMENTO IRREGULAR"
     elif "ULTRAPASSA" in texto:
         return "ULTRAPASSAGEM INDEVIDA"
+    elif "IDENTIFICACAO" in texto or "IDENTIFICAÇÃO" in texto or "IDENTIF":
+        return "MULTA POR NÃO IDENTIFICAÇÃO DO CONDUTOR INFRATOR, IMPOSTA A PJ"
     
     return texto
 
